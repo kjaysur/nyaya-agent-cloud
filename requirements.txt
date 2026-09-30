@@ -7,6 +7,8 @@ langchain-groq
 langchain-chroma
 langchain-huggingface
 duckduckgo-search
-sentence-transformers
+ddgs
 torch
+torchvision
+sentence-transformers
 python-dotenv
