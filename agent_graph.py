@@ -1,6 +1,7 @@
 import os
 import json
 import re
+import time
 from typing import Dict, List
 from dotenv import load_dotenv
 from langgraph.graph import StateGraph, END
@@ -11,8 +12,13 @@ from agent_tools import agent_tools
 
 load_dotenv()
 
-# Initialize Groq LLM
-llm = ChatGroq(model_name="qwen/qwen3.8-27b", temperature=0.0)
+# Initialize Groq LLM with max_retries and timeout for RateLimit resilience
+llm = ChatGroq(
+    model_name="qwen/qwen3.8-27b",
+    temperature=0.0,
+    max_retries=6,
+    request_timeout=60
+)
 
 # Helper function to prevent token limit errors (Groq 7,000 ITPM cap)
 def format_facts_for_prompt(retrieved_facts: List[Dict], max_chars_per_item: int = 500, total_max_chars: int = 3500) -> str:
@@ -68,6 +74,9 @@ def executor_node(state: LegalResearchState) -> Dict:
     current_q = remaining[0]
     llm_with_tools = llm.bind_tools(agent_tools)
     
+    # 1.5-second delay to keep Groq token buckets under rate limits
+    time.sleep(1.5)
+    
     response = llm_with_tools.invoke(f"Gather legal facts and exact statutory sections to answer this sub-question: {current_q}")
     
     new_facts = []
@@ -100,6 +109,9 @@ def executor_node(state: LegalResearchState) -> Dict:
 
 # NODE 3: Critic & Auditor
 def critic_node(state: LegalResearchState) -> Dict:
+    # 1.0-second delay before audit
+    time.sleep(1.0)
+
     # Safely trim context for Critic node
     facts_summary = format_facts_for_prompt(state.get("retrieved_facts", []), max_chars_per_item=300, total_max_chars=2000)
     
@@ -138,6 +150,9 @@ def critic_node(state: LegalResearchState) -> Dict:
 
 # NODE 4: Final Synthesizer
 def synthesizer_node(state: LegalResearchState) -> Dict:
+    # 1.0-second delay before final generation
+    time.sleep(1.0)
+
     # Safely format and cap facts payload to max 3500 characters (~800 tokens)
     formatted_facts = format_facts_for_prompt(state.get("retrieved_facts", []), max_chars_per_item=600, total_max_chars=3500)
     
