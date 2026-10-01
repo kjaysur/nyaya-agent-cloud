@@ -16,7 +16,7 @@ load_dotenv()
 llm = ChatGroq(
     model_name="openai/gpt-oss-120b",
     temperature=0.0,
-    max_tokens=800,
+    max_tokens=1500,
     max_retries=6,
     request_timeout=60
 )
