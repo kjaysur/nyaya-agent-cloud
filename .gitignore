@@ -1,4 +1,4 @@
+chroma_db/
+pdfs/
 .env
-venv/
-__pycache__/
-*.pyc
+ingest_qdrant.py

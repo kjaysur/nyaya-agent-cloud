@@ -12,7 +12,6 @@ from agent_tools import agent_tools
 
 load_dotenv()
 
-# Initialize Groq LLM with max_retries and timeout for RateLimit resilience
 llm = ChatGroq(
     model_name="qwen/qwen3.8-27b",
     temperature=0.0,
@@ -20,8 +19,7 @@ llm = ChatGroq(
     request_timeout=60
 )
 
-# Helper function to prevent token limit errors (Groq 7,000 ITPM cap)
-def format_facts_for_prompt(retrieved_facts: List[Dict], max_chars_per_item: int = 500, total_max_chars: int = 3500) -> str:
+def format_facts_for_prompt(retrieved_facts: List[Dict], max_chars_per_item: int = 800, total_max_chars: int = 4500) -> str:
     if not retrieved_facts:
         return "No evidence retrieved."
     
@@ -29,17 +27,16 @@ def format_facts_for_prompt(retrieved_facts: List[Dict], max_chars_per_item: int
     for idx, item in enumerate(retrieved_facts, 1):
         question = item.get("question", "N/A")
         tool_name = item.get("tool", "unknown")
-        data = str(item.get("data", ""))[:max_chars_per_item]  # Truncate each snippet
+        data = str(item.get("data", ""))[:max_chars_per_item]
         formatted_items.append(f"[{idx}] Question: {question}\nTool ({tool_name}): {data}")
     
     combined = "\n\n".join(formatted_items)
-    return combined[:total_max_chars]  # Hard cap on overall text length (~800-1000 tokens)
+    return combined[:total_max_chars]
 
 
-# NODE 1: Planner
 def planner_node(state: LegalResearchState) -> Dict:
     prompt = ChatPromptTemplate.from_template("""
-    You are a Lead Legal Research Strategist. Break down the user query into 2 to 3 concise sub-questions required for legal research under post-July 2024 Indian Law (BNS/BNSS/BSA).
+    You are a Lead Legal Research Strategist. Break down the user query into 2 to 3 concise sub-questions required for legal research under post-July 2024 Indian Law (BNS/BNSS/BSA and Central Acts).
     
     Query: {query}
     
@@ -62,7 +59,6 @@ def planner_node(state: LegalResearchState) -> Dict:
     }
 
 
-# NODE 2: Dynamic Tool Executor
 def executor_node(state: LegalResearchState) -> Dict:
     plan = state["research_plan"]
     completed = state.get("completed_questions", [])
@@ -74,7 +70,6 @@ def executor_node(state: LegalResearchState) -> Dict:
     current_q = remaining[0]
     llm_with_tools = llm.bind_tools(agent_tools)
     
-    # 1.5-second delay to keep Groq token buckets under rate limits
     time.sleep(1.5)
     
     response = llm_with_tools.invoke(f"Gather legal facts and exact statutory sections to answer this sub-question: {current_q}")
@@ -107,13 +102,9 @@ def executor_node(state: LegalResearchState) -> Dict:
     }
 
 
-# NODE 3: Critic & Auditor
 def critic_node(state: LegalResearchState) -> Dict:
-    # 1.0-second delay before audit
     time.sleep(1.0)
-
-    # Safely trim context for Critic node
-    facts_summary = format_facts_for_prompt(state.get("retrieved_facts", []), max_chars_per_item=300, total_max_chars=2000)
+    facts_summary = format_facts_for_prompt(state.get("retrieved_facts", []), max_chars_per_item=400, total_max_chars=2500)
     
     prompt = ChatPromptTemplate.from_template("""
     You are a Legal Quality Auditor for Indian Law. Review the retrieved evidence:
@@ -139,7 +130,7 @@ def critic_node(state: LegalResearchState) -> Dict:
     except:
         audit = {"is_sufficient": True, "critique_feedback": "Approved"}
         
-    if state["iteration_count"] >= 2:  # Stop after 2 loops to save tokens and prevent rate limits
+    if state["iteration_count"] >= 2:
         audit["is_sufficient"] = True
 
     return {
@@ -148,25 +139,23 @@ def critic_node(state: LegalResearchState) -> Dict:
     }
 
 
-# NODE 4: Final Synthesizer
 def synthesizer_node(state: LegalResearchState) -> Dict:
-    # 1.0-second delay before final generation
     time.sleep(1.0)
-
-    # Safely format and cap facts payload to max 3500 characters (~800 tokens)
-    formatted_facts = format_facts_for_prompt(state.get("retrieved_facts", []), max_chars_per_item=600, total_max_chars=3500)
+    formatted_facts = format_facts_for_prompt(state.get("retrieved_facts", []), max_chars_per_item=800, total_max_chars=4500)
     
     prompt = ChatPromptTemplate.from_template("""
-    You are NyayaAgent, an expert Indian Legal AI. Synthesize a formal legal research memo based on the audited facts below.
+    You are NyayaAgent, an expert Indian Legal AI. Synthesize a formal legal research memo based STRICTLY on the audited facts below.
     
     User Query: {query}
     Audit Feedback: {critique}
     Audited Evidence:
     {facts}
     
-    Mandatory Rules:
-    - Strictly use BNS 2023, BNSS 2023, and BSA 2023 provisions. Do NOT cite repealed IPC/CrPC sections.
-    - Format output with clear headers, statutory tables, and precise penalties.
+    STRICT COMPLIANCE RULES:
+    1. Rely ONLY on the provided Audited Evidence for statutory section numbers and penalty durations.
+    2. Do NOT guess or infer section numbers if they are absent from the evidence.
+    3. Strictly use BNS 2023, BNSS 2023, BSA 2023, or applicable Central Acts. Do NOT cite repealed IPC/CrPC sections.
+    4. Format output with clear headers, statutory tables, and precise penalties.
     
     Conclude with:
     'Disclaimer: This response is generated by an AI research agent for educational purposes and does not constitute formal legal advice.'
@@ -181,14 +170,12 @@ def synthesizer_node(state: LegalResearchState) -> Dict:
     return {"final_memo": res.content}
 
 
-# Conditional Routing Logic
 def decide_next_step(state: LegalResearchState):
     if state["is_satisfied"]:
         return "synthesizer"
     return "executor"
 
 
-# Assemble StateGraph
 workflow = StateGraph(LegalResearchState)
 
 workflow.add_node("planner", planner_node)

@@ -4,11 +4,13 @@ langchain
 langchain-core
 langchain-community
 langchain-groq
-langchain-chroma
 langchain-huggingface
+langchain-qdrant
+qdrant-client
 duckduckgo-search
 ddgs
 torch
 torchvision
 sentence-transformers
 python-dotenv
+tqdm
