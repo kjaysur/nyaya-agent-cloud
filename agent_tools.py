@@ -6,13 +6,11 @@ from langchain_core.tools import tool
 from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_community.tools import DuckDuckGoSearchRun
 
-# Initialize Embeddings
 embeddings = HuggingFaceEmbeddings(
     model_name="sentence-transformers/all-MiniLM-L6-v2",
     model_kwargs={"device": "cpu"}
 )
 
-# Fetch Credentials from Streamlit Secrets or Environment Variables
 qdrant_url = st.secrets.get("QDRANT_URL", os.getenv("QDRANT_URL", ""))
 qdrant_api_key = st.secrets.get("QDRANT_API_KEY", os.getenv("QDRANT_API_KEY", ""))
 
@@ -26,12 +24,13 @@ vector_db = QdrantVectorStore(
     embedding=embeddings
 )
 
+# k=12 gives deep statutory coverage across long Acts
 retriever = vector_db.as_retriever(search_kwargs={"k": 12})
 web_search_tool = DuckDuckGoSearchRun()
 
 @tool
 def search_bns_statutes(query: str) -> str:
-    """Search post-July 2024 Indian laws and Central Acts (BNS, BNSS, BSA, Advocates Act, etc.)."""
+    """Search post-July 2024 Indian laws and Central Acts (BNS, BNSS, BSA, POCSO, IT Act, Companies Act, etc.)."""
     docs = retriever.invoke(query)
     if not docs:
         return "No matching statutory sections found."

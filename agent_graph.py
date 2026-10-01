@@ -46,19 +46,25 @@ def format_facts_for_prompt(retrieved_facts: List[Dict], max_chars_per_item: int
 
 def planner_node(state: LegalResearchState) -> Dict:
     prompt = ChatPromptTemplate.from_template("""
-    You are a Lead Legal Research Strategist. Break down the user query into 2 to 3 concise sub-questions required for legal research under post-July 2024 Indian Law (BNS/BNSS/BSA and Central Acts).
-    
-    Query: {query}
-    
-    Output ONLY a valid JSON array of strings. Example: ["Sub-question 1", "Sub-question 2"]
+    You are an expert Indian Legal Translator & Strategist. Your job is to bridge the gap between layperson terms and formal Indian statutory nomenclature across all 849 Central Acts (BNS, BNSS, BSA, IT Act, Companies Act, POCSO, Income Tax Act, etc.).
+
+    User Query: {query}
+
+    Translate this query into EXACTLY 2 vector search sub-questions:
+    1. Canonical Legal Terminology: Translate everyday language into exact statutory terms, act names, or section concepts (e.g., "stolen credit card" -> "identity theft cheating by impersonation Section 66C 66D IT Act"; "rape of a child" -> "aggravated penetrative sexual assault Section 5 Section 6 POCSO BNS Section 65").
+    2. Primary Offense & Penalty Search: Search for the core governing statutory provision and punishment terms.
+
+    Output ONLY a valid JSON array of two strings. Example: ["Sub-question 1", "Sub-question 2"]
     """)
-    chain = prompt | llm
+    
+    chain = prompt | llm_fast
     res = chain.invoke({"query": state["user_query"]})
     clean_json = re.sub(r'```json|```', '', res.content).strip()
+    
     try:
         plan = json.loads(clean_json)
-    except:
-        plan = [state["user_query"]]
+    except Exception:
+        plan = [state["user_query"], f"statutory provisions and punishment for {state['user_query']}"]
     
     return {
         "research_plan": plan,
