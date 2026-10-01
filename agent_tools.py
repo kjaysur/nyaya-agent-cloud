@@ -26,7 +26,7 @@ vector_db = QdrantVectorStore(
     embedding=embeddings
 )
 
-retriever = vector_db.as_retriever(search_kwargs={"k": 8})
+retriever = vector_db.as_retriever(search_kwargs={"k": 12})
 web_search_tool = DuckDuckGoSearchRun()
 
 @tool
