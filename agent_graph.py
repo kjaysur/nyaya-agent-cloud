@@ -12,13 +12,23 @@ from agent_tools import agent_tools
 
 load_dotenv()
 
+# Primary LLM for final legal memo synthesis (capped to avoid OTPM overflow)
 llm = ChatGroq(
-    model_name="qwen/qwen3.8-27b",
+    model_name="openai/gpt-oss-120b",
     temperature=0.0,
+    max_tokens=800,
     max_retries=6,
     request_timeout=60
 )
 
+# Fast LLM for planning, tool invocation, and auditing
+llm_fast = ChatGroq(
+    model_name="openai/gpt-oss-20b",
+    temperature=0.0,
+    max_tokens=300,
+    max_retries=6,
+    request_timeout=30
+)
 def format_facts_for_prompt(retrieved_facts: List[Dict], max_chars_per_item: int = 800, total_max_chars: int = 4500) -> str:
     if not retrieved_facts:
         return "No evidence retrieved."
