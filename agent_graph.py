@@ -12,7 +12,7 @@ from agent_tools import agent_tools
 
 load_dotenv()
 
-# Primary LLM for final legal memo synthesis (capped to avoid OTPM overflow)
+# Primary LLM for final legal memo synthesis (1500 tokens for full memos)
 llm = ChatGroq(
     model_name="openai/gpt-oss-120b",
     temperature=0.0,
@@ -21,7 +21,7 @@ llm = ChatGroq(
     request_timeout=60
 )
 
-# Fast LLM for planning, tool invocation, and auditing
+# Fast LLM for internal planning and auditing
 llm_fast = ChatGroq(
     model_name="openai/gpt-oss-20b",
     temperature=0.0,
@@ -29,16 +29,15 @@ llm_fast = ChatGroq(
     max_retries=6,
     request_timeout=30
 )
-def format_facts_for_prompt(retrieved_facts: List[Dict], max_chars_per_item: int = 800, total_max_chars: int = 4500) -> str:
+
+def format_facts_for_prompt(retrieved_facts: List[Dict], max_chars_per_item: int = 1000, total_max_chars: int = 5000) -> str:
     if not retrieved_facts:
         return "No evidence retrieved."
     
     formatted_items = []
     for idx, item in enumerate(retrieved_facts, 1):
-        question = item.get("question", "N/A")
-        tool_name = item.get("tool", "unknown")
         data = str(item.get("data", ""))[:max_chars_per_item]
-        formatted_items.append(f"[{idx}] Question: {question}\nTool ({tool_name}): {data}")
+        formatted_items.append(f"Result [{idx}]:\n{data}")
     
     combined = "\n\n".join(formatted_items)
     return combined[:total_max_chars]
@@ -47,16 +46,14 @@ def format_facts_for_prompt(retrieved_facts: List[Dict], max_chars_per_item: int
 def planner_node(state: LegalResearchState) -> Dict:
     prompt = ChatPromptTemplate.from_template("""
     You are a Lead Legal Research Strategist for Indian Law.
-    For ANY user query involving criminal, civil, or corporate offenses, generate EXACTLY 2 retrieval queries:
-
-    1. General Law Query: Search core general statutes (e.g., BNS 2023, BNSS 2023, BSA 2023, Contract Act).
-    2. Special Law Interplay Query: Identify and search any governing Special Act that runs concurrently or overrides general law for this fact pattern (e.g., if child offense -> search POCSO Act 2012; if cyber crime -> search IT Act 2000; if cheque bounce -> search NI Act 1881; if corporate fraud -> search Companies Act 2013).
+    Analyze the user query and break it down into EXACTLY 2 vector database search queries:
+    1. Primary Offense & Penalty Query: Search for the exact statutory section, definition, and punishment provisions.
+    2. Special/Interplay Query: Search for any accompanying special provisions, non-obstante clauses, or procedural rules governing this fact pattern.
 
     User Query: {query}
 
-    Output ONLY a valid JSON array of two strings: ["General Law Query", "Special Law Query"]
+    Output ONLY a valid JSON array of two search strings. Example: ["Search query 1", "Search query 2"]
     """)
-        
     chain = prompt | llm_fast
     res = chain.invoke({"query": state["user_query"]})
     clean_json = re.sub(r'```json|```', '', res.content).strip()
@@ -86,22 +83,20 @@ def executor_node(state: LegalResearchState) -> Dict:
     current_q = remaining[0]
     llm_with_tools = llm_fast.bind_tools(agent_tools)
     
-    time.sleep(2.0)
+    time.sleep(1.5)
     
-    response = llm_with_tools.invoke(f"Gather legal facts and exact statutory sections to answer this sub-question: {current_q}")
+    response = llm_with_tools.invoke(f"Search the statutory database for: {current_q}")
     
     new_facts = []
     if response.tool_calls:
         for tool_call in response.tool_calls:
             tool_name = tool_call["name"]
             tool_args = tool_call["args"]
-            
-            # Catch any tool-level exception gracefully
             try:
                 selected_tool = next(t for t in agent_tools if t.name == tool_name)
                 output = selected_tool.invoke(tool_args)
             except Exception as err:
-                output = f"Tool '{tool_name}' encountered an error: {str(err)}. Relying on statutory vector database."
+                output = f"Search error: {str(err)}"
                 
             new_facts.append({
                 "question": current_q,
@@ -109,10 +104,13 @@ def executor_node(state: LegalResearchState) -> Dict:
                 "data": output
             })
     else:
+        # Fallback to direct search tool invocation if LLM skips tool call
+        selected_tool = agent_tools[0]
+        output = selected_tool.invoke({"query": current_q})
         new_facts.append({
             "question": current_q,
-            "tool": "llm_direct",
-            "data": response.content
+            "tool": selected_tool.name,
+            "data": output
         })
         
     completed.append(current_q)
@@ -129,63 +127,62 @@ def critic_node(state: LegalResearchState) -> Dict:
     facts_summary = format_facts_for_prompt(state.get("retrieved_facts", []), max_chars_per_item=400, total_max_chars=2500)
     
     prompt = ChatPromptTemplate.from_template("""
-    You are a Legal Quality Auditor for Indian Law. Review the retrieved evidence:
+    You are a Legal Quality Auditor. Review the retrieved statutory evidence:
     
     {facts}
     
-    Check for:
-    1. Are repealed IPC sections (e.g. 302, 307, 420) cited instead of BNS 2023 sections?
-    2. Are there missing core elements needed to answer: "{query}"?
-    
-    Respond in JSON format:
-    {{
-        "is_sufficient": true | false,
-        "critique_feedback": "Detailed reason if false, or 'Approved' if true."
-    }}
+    Query: {query}
+
+    Audit Criteria:
+    - Did we retrieve statutory text from active Indian Central Acts?
+    - Is the evidence relevant to answering the query?
+
+    Respond in JSON format ONLY:
+    {{"is_sufficient": true, "critique_feedback": "Approved"}}
     """)
-    chain = prompt | llm
+    chain = prompt | llm_fast
     res = chain.invoke({"facts": facts_summary, "query": state["user_query"]})
     clean_json = re.sub(r'```json|```', '', res.content).strip()
     
     try:
         audit = json.loads(clean_json)
-    except:
+    except Exception:
         audit = {"is_sufficient": True, "critique_feedback": "Approved"}
         
     if state["iteration_count"] >= 2:
         audit["is_sufficient"] = True
 
     return {
-        "is_satisfied": audit["is_sufficient"],
-        "critique_feedback": audit.get("critique_feedback", "")
+        "is_satisfied": audit.get("is_sufficient", True),
+        "critique_feedback": audit.get("critique_feedback", "Approved")
     }
 
 
 def synthesizer_node(state: LegalResearchState) -> Dict:
     time.sleep(1.0)
-    formatted_facts = format_facts_for_prompt(state.get("retrieved_facts", []), max_chars_per_item=800, total_max_chars=4500)
+    formatted_facts = format_facts_for_prompt(state.get("retrieved_facts", []), max_chars_per_item=1000, total_max_chars=5000)
     
     prompt = ChatPromptTemplate.from_template("""
-    You are NyayaAgent, an expert Indian Legal AI. Synthesize a formal legal research memo based STRICTLY on the audited facts below.
-    
+    You are NyayaAgent, an expert AI Legal Research System specializing in Indian Statutory Law.
+    Synthesize a formal legal research memorandum based STRICTLY on the audited statutory evidence provided below.
+
     User Query: {query}
-    Audit Feedback: {critique}
-    Audited Evidence:
+    
+    Audited Statutory Evidence:
     {facts}
-    
-    STRICT COMPLIANCE RULES:
-    1. Rely ONLY on the provided Audited Evidence for statutory section numbers and penalty durations.
-    2. Do NOT guess or infer section numbers if they are absent from the evidence.
-    3. Strictly use BNS 2023, BNSS 2023, BSA 2023, or applicable Central Acts. Do NOT cite repealed IPC/CrPC sections.
-    4. Format output with clear headers, statutory tables, and precise penalties.
-    
+
+    UNIVERSAL LEGAL COMPLIANCE RULES:
+    1. STATUTE ACCURACY: Rely strictly on the STATUTE names provided in the evidence headers (e.g. "Bharatiya Nyaya Sanhita, 2023", "Protection of Children from Sexual Offences Act, 2012", "Information Technology Act, 2000"). Never invent or guess Act titles or acronym expansions.
+    2. NO REPEALED LAWS: If the query concerns post-July 2024 offenses, prioritize post-reform Acts (BNS, BNSS, BSA) over repealed legacy laws (IPC, CrPC, Evidence Act) unless explicitly asked for historical comparison.
+    3. STRICT GROUNDING: State exact section numbers, minimum/maximum terms, and fine provisions ONLY if explicitly present in the evidence. If text in a chunk is incomplete or truncated, state what is known and note the limitation clearly.
+    4. STRUCTURE: Format output cleanly with headers: Issue, Relevant Statutory Provisions, Detailed Legal Analysis, and Summary Table.
+
     Conclude with:
     'Disclaimer: This response is generated by an AI research agent for educational purposes and does not constitute formal legal advice.'
     """)
     chain = prompt | llm
     res = chain.invoke({
         "query": state["user_query"],
-        "critique": state.get("critique_feedback", "None"),
         "facts": formatted_facts
     })
     

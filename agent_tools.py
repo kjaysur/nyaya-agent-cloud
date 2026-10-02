@@ -4,13 +4,14 @@ from qdrant_client import QdrantClient
 from langchain_qdrant import QdrantVectorStore
 from langchain_core.tools import tool
 from langchain_huggingface import HuggingFaceEmbeddings
-from langchain_community.tools import DuckDuckGoSearchRun
 
+# Initialize Embeddings
 embeddings = HuggingFaceEmbeddings(
     model_name="sentence-transformers/all-MiniLM-L6-v2",
     model_kwargs={"device": "cpu"}
 )
 
+# Fetch Credentials
 qdrant_url = st.secrets.get("QDRANT_URL", os.getenv("QDRANT_URL", ""))
 qdrant_api_key = st.secrets.get("QDRANT_API_KEY", os.getenv("QDRANT_API_KEY", ""))
 
@@ -24,32 +25,30 @@ vector_db = QdrantVectorStore(
     embedding=embeddings
 )
 
+# k=12 allows deep retrieval across large statutory files
 retriever = vector_db.as_retriever(search_kwargs={"k": 12})
-_raw_ddg_tool = DuckDuckGoSearchRun()
 
 @tool
-def search_bns_statutes(query: str) -> str:
-    """Search post-July 2024 Indian laws and Central Acts (BNS, BNSS, BSA, POCSO, IT Act, etc.)."""
+def search_statutory_database(query: str) -> str:
+    """Search all 849 Indian Central Acts (BNS, BNSS, BSA, POCSO, IT Act, Companies Act, Income Tax Act, etc.) in Qdrant Cloud."""
     try:
         docs = retriever.invoke(query)
         if not docs:
-            return "No matching statutory sections found in Qdrant database."
+            return "No matching statutory provisions found in the database."
         
         results = []
         for i, doc in enumerate(docs, 1):
-            act_title = doc.metadata.get("act_title", "Unknown Act")
-            results.append(f"[{i}] Source: {act_title}\nText: {doc.page_content}")
+            act_title = doc.metadata.get("act_title", "Central Act").replace("_", " ").title()
+            source_file = doc.metadata.get("source_file", "Statute")
+            results.append(
+                f"--- EVIDENCE ITEM [{i}] ---\n"
+                f"STATUTE: {act_title} ({source_file})\n"
+                f"TEXT:\n{doc.page_content.strip()}\n"
+            )
         
         return "\n\n".join(results)
     except Exception as e:
-        return f"Error querying statutory vector database: {str(e)}"
+        return f"Database search error: {str(e)}"
 
-@tool
-def safe_web_search(query: str) -> str:
-    """Search the web for supplementary legal information or recent case law."""
-    try:
-        return _raw_ddg_tool.invoke(query)
-    except Exception as e:
-        return f"Web search unavailable ({type(e).__name__}). Relying on statutory vector database evidence."
-
-agent_tools = [search_bns_statutes, safe_web_search]
+# Statutory DB is the sole authority tool
+agent_tools = [search_statutory_database]
