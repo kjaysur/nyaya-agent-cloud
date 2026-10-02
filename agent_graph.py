@@ -84,9 +84,9 @@ def executor_node(state: LegalResearchState) -> Dict:
         return {"is_satisfied": True}
         
     current_q = remaining[0]
-    llm_with_tools = llm.bind_tools(agent_tools)
+    llm_with_tools = llm_fast.bind_tools(agent_tools)
     
-    time.sleep(1.5)
+    time.sleep(2.0)
     
     response = llm_with_tools.invoke(f"Gather legal facts and exact statutory sections to answer this sub-question: {current_q}")
     
@@ -95,8 +95,14 @@ def executor_node(state: LegalResearchState) -> Dict:
         for tool_call in response.tool_calls:
             tool_name = tool_call["name"]
             tool_args = tool_call["args"]
-            selected_tool = next(t for t in agent_tools if t.name == tool_name)
-            output = selected_tool.invoke(tool_args)
+            
+            # Catch any tool-level exception gracefully
+            try:
+                selected_tool = next(t for t in agent_tools if t.name == tool_name)
+                output = selected_tool.invoke(tool_args)
+            except Exception as err:
+                output = f"Tool '{tool_name}' encountered an error: {str(err)}. Relying on statutory vector database."
+                
             new_facts.append({
                 "question": current_q,
                 "tool": tool_name,

@@ -6,13 +6,11 @@ from langchain_core.tools import tool
 from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_community.tools import DuckDuckGoSearchRun
 
-# Initialize Embeddings
 embeddings = HuggingFaceEmbeddings(
     model_name="sentence-transformers/all-MiniLM-L6-v2",
     model_kwargs={"device": "cpu"}
 )
 
-# Qdrant Credentials
 qdrant_url = st.secrets.get("QDRANT_URL", os.getenv("QDRANT_URL", ""))
 qdrant_api_key = st.secrets.get("QDRANT_API_KEY", os.getenv("QDRANT_API_KEY", ""))
 
@@ -48,11 +46,10 @@ def search_bns_statutes(query: str) -> str:
 
 @tool
 def safe_web_search(query: str) -> str:
-    """Search the web for supplementary legal information, case law, or recent updates."""
+    """Search the web for supplementary legal information or recent case law."""
     try:
         return _raw_ddg_tool.invoke(query)
     except Exception as e:
-        # Fallback gracefully if DuckDuckGo hits DNS or rate limits
-        return f"Web search temporarily unavailable ({type(e).__name__}). Relying on statutory vector database evidence."
+        return f"Web search unavailable ({type(e).__name__}). Relying on statutory vector database evidence."
 
 agent_tools = [search_bns_statutes, safe_web_search]
