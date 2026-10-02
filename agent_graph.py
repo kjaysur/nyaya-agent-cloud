@@ -46,17 +46,17 @@ def format_facts_for_prompt(retrieved_facts: List[Dict], max_chars_per_item: int
 
 def planner_node(state: LegalResearchState) -> Dict:
     prompt = ChatPromptTemplate.from_template("""
-    You are an expert Indian Legal Translator & Strategist. Your job is to bridge the gap between layperson terms and formal Indian statutory nomenclature across all 849 Central Acts (BNS, BNSS, BSA, IT Act, Companies Act, POCSO, Income Tax Act, etc.).
+    You are a Lead Legal Research Strategist for Indian Law.
+    For ANY user query involving criminal, civil, or corporate offenses, generate EXACTLY 2 retrieval queries:
+
+    1. General Law Query: Search core general statutes (e.g., BNS 2023, BNSS 2023, BSA 2023, Contract Act).
+    2. Special Law Interplay Query: Identify and search any governing Special Act that runs concurrently or overrides general law for this fact pattern (e.g., if child offense -> search POCSO Act 2012; if cyber crime -> search IT Act 2000; if cheque bounce -> search NI Act 1881; if corporate fraud -> search Companies Act 2013).
 
     User Query: {query}
 
-    Translate this query into EXACTLY 2 vector search sub-questions:
-    1. Canonical Legal Terminology: Translate everyday language into exact statutory terms, act names, or section concepts (e.g., "stolen credit card" -> "identity theft cheating by impersonation Section 66C 66D IT Act"; "rape of a child" -> "aggravated penetrative sexual assault Section 5 Section 6 POCSO BNS Section 65").
-    2. Primary Offense & Penalty Search: Search for the core governing statutory provision and punishment terms.
-
-    Output ONLY a valid JSON array of two strings. Example: ["Sub-question 1", "Sub-question 2"]
+    Output ONLY a valid JSON array of two strings: ["General Law Query", "Special Law Query"]
     """)
-    
+        
     chain = prompt | llm_fast
     res = chain.invoke({"query": state["user_query"]})
     clean_json = re.sub(r'```json|```', '', res.content).strip()
